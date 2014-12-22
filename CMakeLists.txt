@@ -9,6 +9,8 @@ add_executable( masterserver
 	signal.hpp signal.cpp
 	master.hpp master.cpp
 	defer.hpp
+	json11/json11.hpp json11/json11.cpp
+	consolelog.hpp consolelog.cpp
 	)
 
 target_link_libraries( masterserver microhttpd pthread )

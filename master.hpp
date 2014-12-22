@@ -1,5 +1,7 @@
 #pragma once
 
+#include "consolelog.hpp"
+
 #include <microhttpd.h>
 
 #include <mutex>
@@ -8,11 +10,22 @@
 #include <string>
 #include <regex>
 #include <thread>
+#include <unordered_map>
+#include <list>
+#include <chrono>
+#include <memory>
 
 class MasterServer
 {
+private:
+	enum Settings
+	{
+		SERVER_TIMEOUT = 60, ///< in seconds
+		PRUNE_INTERVAL = 30 ///< in seconds
+	};
+	
 public:
-	MasterServer( const unsigned short port );
+	MasterServer( const unsigned short port, std::shared_ptr< ConsoleLog > log );
 	~MasterServer();
 	// non-copyable
 	MasterServer( const MasterServer& ) = delete;
@@ -45,7 +58,7 @@ private:
 		size_t bodySize = 0;
 		std::vector< char > body;
 		std::string game;
-		std::string version;
+		unsigned long version;
 	};
 	
 	struct DaemonClosure
@@ -53,14 +66,45 @@ private:
 		MasterServer* master;
 		std::mutex mutex;
 	};
+	
+	typedef std::chrono::steady_clock::time_point TimePoint;
+	
+	struct Server
+	{
+		const std::string json;
+		TimePoint lastHeartbeat;
+	};
+	
+	class Servers
+	{
+	public:
+		Servers( const std::string& json );
+		Servers( const Servers& ) = delete;
+		Servers& operator=( const Servers& ) = delete;
+		Servers( Servers&& ) = default;
+		Servers& operator=( Servers&& ) = default;
+		
+		void post( const std::string& json );
+		void prune( const TimePoint& cutoff, std::shared_ptr< ConsoleLog > log );
+		const std::string& toJson() const { return m_json; }
+		const bool empty() const { return m_orderedByLastHeartbeat.empty(); }
+	private:
+		void updateJson();
+	private:
+		std::string m_json;
+		/// oldest heartbeat first
+		std::list< Server > m_orderedByLastHeartbeat;
+		std::unordered_map< std::string, std::list< Server >::iterator > m_byJson;
+	};
 
 private:
+	// these need not be thread safe since they're only called in a thread-safe manner.
 	void pruneServers();
-	const std::string getServers( const std::string& game, const std::string& version ) const;
-	const MasterServer::Response updateServer( const std::string& game, const std::string& version, const std::string& body );
+	const std::string& getServers( const std::string& game, const unsigned long version ) const;
+	const MasterServer::Response updateServer( const std::string& game, const unsigned long version, const std::string& body );
 
 private:
-	static int sendResponse( MHD_Connection *connection, const MasterServer::Response& response );
+	static int sendResponse( MHD_Connection *connection, const MasterServer::Response& response, std::shared_ptr< ConsoleLog > log );
 	static int handleAccess( void *globalUserdata, MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **requestUserdata );
 	static void completeRequest( void *userdata, MHD_Connection *connection, void **requestUserdata, MHD_RequestTerminationCode reason );
 	
@@ -71,4 +115,8 @@ private:
 	DaemonClosure* m_daemonClosure = nullptr;
 	bool m_stopPruneThread = false;
 	std::thread m_pruneThread;
+	std::shared_ptr< ConsoleLog > m_log;
+	
+	/// game -> ( version -> servers )
+	std::unordered_map< std::string, std::unordered_map< unsigned long, Servers > > m_servers;
 };
